@@ -22,16 +22,16 @@ class SimpleBERT:
     for i in range(unit_num):
       self.encoder_list.append(Encoder(self.vocab_num, hopping_num, head_num, dim, dropout_rate, max_length, name=f'encoder_{i}'))
       
-    inputs1 = tfk.Input(shape=(max_length,), dtype='int32', name='main_input') #[batch_size, max_length]
-    inputs2 = tfk.Input(shape=(max_length,), dtype='int32', name='segment_type') #[batch_size, max_length]
+    inputs1 = tfk.Input(shape=(max_length,), dtype='int32', name='input_main') #[batch_size, max_length]
+    inputs2 = tfk.Input(shape=(max_length,), dtype='int32', name='input_segment_type') #[batch_size, max_length]
     mask = tfk.layers.Lambda(lambda x: K.cast(K.not_equal(x, 0), tf.float32))(inputs1)
-    mask = tfk.layers.Lambda(lambda x: K.tile(K.expand_dims(x, -1), [1, 1, dim]))(mask)
-    pad = tfk.layers.Lambda(lambda x: K.cast(K.equal(x, 0), tf.float32))(inputs1)
+    mask = tfk.layers.Lambda(lambda x: K.tile(K.expand_dims(x, -1), [1, 1, dim]), name='embedd_mask')(mask)
+    pad = tfk.layers.Lambda(lambda x: K.cast(K.equal(x, 0), tf.float32), name='padding_mask')(inputs1)
     
-    token_embedded = tfk.layers.Embedding(input_dim=self.vocab_num, output_dim=dim, input_length=max_length)(inputs1)
-    token_embedded = tfk.layers.Lambda(lambda x: x * (dim ** 0.5))(token_embedded)
+    token_embedded = tfk.layers.Embedding(input_dim=self.vocab_num, output_dim=dim, input_length=max_length, name='token_embedding')(inputs1)
+    token_embedded = tfk.layers.Lambda(lambda x: x * (dim ** 0.5), name='scaling')(token_embedded)
     position_embedded = PositionalEncoder(max_length, dim)(token_embedded)
-    segment_embedded = tfk.layers.Embedding(input_dim=3, output_dim=dim, input_length=max_length)(inputs2)
+    segment_embedded = tfk.layers.Embedding(input_dim=3, output_dim=dim, input_length=max_length, name='segment_embedding')(inputs2)
     embedded = tfk.layers.Add()([token_embedded, position_embedded, segment_embedded])
     embedded = tfk.layers.Dropout(rate=dropout_rate)(embedded)
     embedded = tfk.layers.Multiply()([embedded, mask])
@@ -44,19 +44,13 @@ class SimpleBERT:
     sentence_shuffle_y_ = tfk.layers.Dense(1, activation='sigmoid', name='shuffle')(flat)
     random_mask_y_ = tfk.layers.Dense(self.vocab_num, activation='softmax', name='mask')(flat)
     
-    self.bert = tfk.models.Model(inputs=[inputs1, inputs2], outputs=[sentence_shuffle_y_, random_mask_y_])
-    self.bert.compile(
+    self.model = tfk.models.Model(inputs=[inputs1, inputs2], outputs=[sentence_shuffle_y_, random_mask_y_])
+    self.model.compile(
         optimizer=tfk.optimizers.Adam(lr=init_lr, decay=0.01),
         loss={'shuffle': 'binary_crossentropy', 'mask': 'categorical_crossentropy'},
         loss_weights={'shuffle': 0.8, 'mask': 0.2},
         metrics=['accuracy'])
     
   def pretraining(self, x1, x2, y1, y2, batch_size=32, epochs=1):
-    hist = self.bert.fit([x1, x2], [y1, y2], batch_size=batch_size, epochs=epochs)
+    hist = self.model.fit([x1, x2], [y1, y2], batch_size=batch_size, epochs=epochs)
     return hist
-    
-  def save_weights(self, file):
-    self.bert.save_weights(file)
-    
-  def load_weights(self, file):
-    self.bert.load_weights(file)
